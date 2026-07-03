@@ -6,7 +6,7 @@ function fmt(n: number) {
   return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 function dollars(n: number) {
-  return `$${fmt(Math.max(0, Math.round(n)))}`;
+  return `$${fmt(Math.max(0, Math.round(n)))}}`;
 }
 
 // Assumes a Growth-tier full-time VA at $1,999/mo as the comparison baseline.
