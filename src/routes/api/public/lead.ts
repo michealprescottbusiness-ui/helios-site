@@ -1,86 +1,47 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { z } from "zod";
-import { createHash } from "crypto";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
-const LeadSchema = z.object({
-  source: z.enum([
-    "contact",
-    "resource-download",
-    "footer",
-    "roi-calculator",
-    "newsletter",
-  ]),
-  name: z.string().trim().max(120).optional().nullable(),
-  email: z.string().trim().toLowerCase().email().max(255),
-  company: z.string().trim().max(160).optional().nullable(),
-  phone: z.string().trim().max(40).optional().nullable(),
-  bottleneck: z.string().trim().max(2000).optional().nullable(),
-  resource_slug: z.string().trim().max(120).optional().nullable(),
-  role: z.string().trim().max(80).optional().nullable(),
-  utm_source: z.string().trim().max(120).optional().nullable(),
-  utm_medium: z.string().trim().max(120).optional().nullable(),
-  utm_campaign: z.string().trim().max(120).optional().nullable(),
-});
-
-// Simple in-memory rate limit per IP (best-effort; resets on cold start).
-const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 5;
-const hits = new Map<string, number[]>();
-
-function rateLimited(key: string) {
-  const now = Date.now();
-  const arr = (hits.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
-  arr.push(now);
-  hits.set(key, arr);
-  return arr.length > RATE_MAX;
-}
+// Legacy endpoint. Forms now post directly to the Helios ops intake; anything
+// still posting here gets forwarded so no lead is ever lost.
+const INTAKE_URL = "https://ssgceutucmsrleeopujl.supabase.co/functions/v1/intake";
 
 export const Route = createFileRoute("/api/public/lead")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        let raw: unknown;
+        let raw: Record<string, unknown>;
         try {
-          raw = await request.json();
+          raw = (await request.json()) as Record<string, unknown>;
         } catch {
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
 
-        const parsed = LeadSchema.safeParse(raw);
-        if (!parsed.success) {
-          return Response.json(
-            { error: "Invalid input", issues: parsed.error.flatten() },
-            { status: 400 },
-          );
-        }
+        const s = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+        const notes = [
+          s(raw.source) ? `form: ${s(raw.source)}` : null,
+          s(raw.role) ? `role: ${s(raw.role)}` : null,
+          s(raw.phone) ? `phone: ${s(raw.phone)}` : null,
+          s(raw.resource_slug) ? `resource: ${s(raw.resource_slug)}` : null,
+          s(raw.utm_campaign) ? `campaign: ${s(raw.utm_campaign)}` : null,
+          s(raw.bottleneck) ?? null,
+        ]
+          .filter(Boolean)
+          .join(" | ");
 
-        const ip =
-          request.headers.get("cf-connecting-ip") ??
-          request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-          "unknown";
-        const ipHash = createHash("sha256").update(ip).digest("hex").slice(0, 32);
-
-        if (rateLimited(ipHash)) {
-          return Response.json(
-            { error: "Too many submissions. Please try again shortly." },
-            { status: 429 },
-          );
-        }
-
-        const userAgent = request.headers.get("user-agent")?.slice(0, 500) ?? null;
-
-        const { error } = await supabaseAdmin.from("leads").insert({
-          ...parsed.data,
-          user_agent: userAgent,
-          ip_hash: ipHash,
+        const res = await fetch(INTAKE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: s(raw.name),
+            email: s(raw.email),
+            company: s(raw.company),
+            notes,
+            source: s(raw.utm_source) ? "meta_ad" : "website",
+          }),
         });
 
-        if (error) {
-          console.error("[lead] insert failed", error);
-          return Response.json({ error: "Could not save lead" }, { status: 500 });
+        if (!res.ok) {
+          return Response.json({ error: "Could not save" }, { status: 500 });
         }
-
         return Response.json({ ok: true });
       },
     },
