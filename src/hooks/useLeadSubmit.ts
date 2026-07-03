@@ -19,8 +19,11 @@ export interface LeadPayload {
   role?: string | null;
 }
 
+// Helios ops intake — leads land in the operations dashboard Client Pipeline.
+const INTAKE_URL = "https://ssgceutucmsrleeopujl.supabase.co/functions/v1/intake";
+
 function utm() {
-  if (typeof window === "undefined") return {};
+  if (typeof window === "undefined") return {} as Record<string, string | undefined>;
   const p = new URLSearchParams(window.location.search);
   return {
     utm_source: p.get("utm_source") ?? undefined,
@@ -35,10 +38,26 @@ export function useLeadSubmit() {
   async function submit(payload: LeadPayload) {
     setSubmitting(true);
     try {
-      const res = await fetch("/api/public/lead", {
+      const u = utm();
+      const notesParts = [
+        `form: ${payload.source}`,
+        payload.role ? `role: ${payload.role}` : null,
+        payload.phone ? `phone: ${payload.phone}` : null,
+        payload.resource_slug ? `resource: ${payload.resource_slug}` : null,
+        u.utm_campaign ? `campaign: ${u.utm_campaign}` : null,
+        payload.bottleneck || null,
+      ].filter(Boolean);
+
+      const res = await fetch(INTAKE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, ...utm() }),
+        body: JSON.stringify({
+          name: payload.name ?? undefined,
+          email: payload.email,
+          company: payload.company ?? undefined,
+          notes: notesParts.join(" | "),
+          source: u.utm_source ? "meta_ad" : "website",
+        }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
